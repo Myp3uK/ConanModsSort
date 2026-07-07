@@ -31,18 +31,22 @@
 dotnet run
 ```
 
-Автономная сборка одним `.exe` (компактно, но нужен установленный рантайм):
+Один `.exe`, компактно (нужен установленный .NET Desktop Runtime):
 
 ```powershell
-dotnet build -c Release
+dotnet publish ConanModsSort.csproj -c Release -r win-x64 --no-self-contained `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
 
-Полностью автономный single-file (крупнее, рантайм не нужен):
+Один `.exe`, автономно (рантайм не нужен, но крупнее):
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained `
-  -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+dotnet publish ConanModsSort.csproj -c Release -r win-x64 --self-contained `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:EnableCompressionInSingleFile=true
 ```
+
+Готовые сборки обоих вариантов — на странице [Releases](../../releases).
 
 ## Структура проекта
 

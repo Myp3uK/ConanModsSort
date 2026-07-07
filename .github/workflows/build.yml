@@ -37,21 +37,23 @@ jobs:
       - name: Restore
         run: dotnet restore
 
-      # Вариант 1: framework-dependent (нужен установленный .NET Desktop Runtime, компактно)
-      - name: Publish framework-dependent
+      # Вариант 1: framework-dependent, ОДИН файл (нужен установленный .NET Desktop Runtime, компактно)
+      - name: Publish framework-dependent (single-file)
         run: >
-          dotnet publish -c Release --no-self-contained
+          dotnet publish -c Release -r win-x64 --no-self-contained
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
           -p:Version=${{ steps.ver.outputs.version }} -o publish/fd
 
-      - name: Zip framework-dependent
+      - name: Rename framework-dependent exe
         shell: pwsh
-        run: Compress-Archive -Path publish/fd/* -DestinationPath "ConanModsSort-${{ steps.ver.outputs.version }}-win-x64.zip" -Force
+        run: Copy-Item publish/fd/ConanModsSort.exe "ConanModsSort-${{ steps.ver.outputs.version }}-win-x64.exe" -Force
 
-      # Вариант 2: self-contained single-file (рантайм не нужен, один exe)
-      - name: Publish self-contained single-file
+      # Вариант 2: self-contained, ОДИН файл (рантайм не нужен)
+      - name: Publish self-contained (single-file)
         run: >
           dotnet publish -c Release -r win-x64 --self-contained
-          -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
           -p:Version=${{ steps.ver.outputs.version }} -o publish/sc
 
       - name: Rename standalone exe
@@ -63,7 +65,7 @@ jobs:
         with:
           name: ConanModsSort-${{ steps.ver.outputs.version }}
           path: |
-            ConanModsSort-${{ steps.ver.outputs.version }}-win-x64.zip
+            ConanModsSort-${{ steps.ver.outputs.version }}-win-x64.exe
             ConanModsSort-${{ steps.ver.outputs.version }}-win-x64-standalone.exe
 
       - name: Release
@@ -72,5 +74,5 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            ConanModsSort-${{ steps.ver.outputs.version }}-win-x64.zip
+            ConanModsSort-${{ steps.ver.outputs.version }}-win-x64.exe
             ConanModsSort-${{ steps.ver.outputs.version }}-win-x64-standalone.exe
