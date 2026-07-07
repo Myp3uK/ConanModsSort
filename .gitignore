@@ -1,0 +1,37 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+publish/
+*.dll
+*.exe
+*.pdb
+
+# Rider / Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+*.rsuser
+*_i.c
+*_p.c
+
+# VS Code (personal workspace settings)
+.vscode/
+
+# Claude Code (local settings)
+.claude/
+
+# NuGet
+*.nupkg
+packages/
+.nuget/
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store

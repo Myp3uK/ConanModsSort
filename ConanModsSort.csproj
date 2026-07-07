@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>ConanModsSort</AssemblyName>
+    <RootNamespace>ConanModsSort</RootNamespace>
+    <ApplicationIcon>Icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Иконка окна (и в ресурсах для runtime) -->
+    <Resource Include="Icon.ico" />
+    <Resource Include="Icon.png" />
+  </ItemGroup>
+
+</Project>
