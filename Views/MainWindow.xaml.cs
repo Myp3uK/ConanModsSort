@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private VersionLists _current;
     private ModPreset? _loadedPreset;
     private List<string>? _presetBaseline;
+    private List<string>? _modlistBaseline;
 
     private Point _dragStart;
     private ModItem? _dragItem;
@@ -63,14 +64,26 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (IsPresetModified())
+        if (_loadedPreset != null)
+        {
+            if (IsPresetModified())
+            {
+                var r = MessageDialog.Show(this, "Несохранённые изменения",
+                    $"Профиль «{_loadedPreset.Name}» изменён, но не сохранён.\n\nСохранить перед выходом?",
+                    MessageButtons.YesNoCancel, MessageKind.Warning);
+
+                if (r == MessageResult.Cancel) { e.Cancel = true; return; }
+                if (r == MessageResult.Yes) SaveLoadedPreset();
+            }
+        }
+        else if (IsModlistModified())
         {
             var r = MessageDialog.Show(this, "Несохранённые изменения",
-                $"Профиль «{_loadedPreset!.Name}» изменён, но не сохранён.\n\nСохранить перед выходом?",
+                "Список модов изменён, но не применён к modlist.txt.\n\nПрименить перед выходом?",
                 MessageButtons.YesNoCancel, MessageKind.Warning);
 
             if (r == MessageResult.Cancel) { e.Cancel = true; return; }
-            if (r == MessageResult.Yes) SaveLoadedPreset();
+            if (r == MessageResult.Yes) WriteModlist();
         }
 
         base.OnClosing(e);
@@ -236,6 +249,16 @@ public partial class MainWindow : Window
 
     private void RefreshPresetDirty() =>
         txtPresetDirty.Visibility = IsPresetModified() ? Visibility.Visible : Visibility.Collapsed;
+
+    private List<string> OrderSignature() =>
+        _enhanced.Ordered.Select(m => "E:" + m.ModId)
+            .Concat(_legacy.Ordered.Select(m => "L:" + m.ModId))
+            .ToList();
+
+    private void SetModlistBaseline() => _modlistBaseline = OrderSignature();
+
+    private bool IsModlistModified() =>
+        _modlistBaseline != null && !OrderSignature().SequenceEqual(_modlistBaseline);
 
     private void Share_Click(object sender, RoutedEventArgs e)
     {
@@ -927,6 +950,7 @@ public partial class MainWindow : Window
                 txtStatus.Text += $"  (Steam недоступен: {error} — версии не определены, всё в Legacy)";
 
             RefreshPresetDirty();
+            SetModlistBaseline();
         }
         finally
         {
@@ -1362,13 +1386,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Apply_Click(object sender, RoutedEventArgs e)
+    private void Apply_Click(object sender, RoutedEventArgs e) => WriteModlist();
+
+    private bool WriteModlist()
     {
         var modlist = _settings.ModlistPath;
         if (string.IsNullOrEmpty(modlist))
         {
             ShowToast("Сначала укажите путь к modlist.txt.", ToastKind.Warning);
-            return;
+            return false;
         }
 
         var version = ReferenceEquals(_current, _enhanced) ? "Enhanced" : "Legacy";
@@ -1381,12 +1407,15 @@ public partial class MainWindow : Window
             File.WriteAllLines(modlist, lines);
 
             _settings.Save();
+            SetModlistBaseline();
             txtStatus.Text = $"[{version}] записано {lines.Length} модов в {modlist}";
             ShowToast($"Готово! {version}: записано {lines.Length} модов в modlist.txt", ToastKind.Success);
+            return true;
         }
         catch (Exception ex)
         {
             ShowToast($"Не удалось записать modlist.txt: {ex.Message}", ToastKind.Warning, seconds: 7);
+            return false;
         }
     }
 }
