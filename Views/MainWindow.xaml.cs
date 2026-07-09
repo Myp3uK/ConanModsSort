@@ -304,66 +304,87 @@ public partial class MainWindow : Window
         ApplyParsedImport(ids, headerEnhanced);
     }
 
-    private void ApplyParsedImport(List<string> ids, bool? headerEnhanced)
+    private async void ApplyParsedImport(List<string> ids, bool? headerEnhanced)
     {
+        if (ids.Count == 0) return;
+
         var global = _enhanced.Available.Concat(_enhanced.Ordered)
             .Concat(_legacy.Available).Concat(_legacy.Ordered)
             .GroupBy(m => m.ModId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-        var matched = ids.Where(global.ContainsKey).Select(id => global[id]).ToList();
         var missingIds = ids.Where(id => !global.ContainsKey(id)).ToList();
 
-        void Redownload() => DownloadMissing(missingIds, onComplete: () => ApplyParsedImport(ids, headerEnhanced));
-
-        if (matched.Count == 0)
+        // данные о недостающих (версия/название/превью) — для плейсхолдеров
+        var missDetails = new Dictionary<string, SteamWorkshopApi.Details>();
+        if (missingIds.Count > 0)
         {
-            ShowToast(
-                $"Ни один из {ids.Count} модов не найден в папке.",
-                ToastKind.Warning,
-                actionText: "Скачать (SteamCMD)", action: Redownload, seconds: 10);
-            return;
+            try { missDetails = await SteamWorkshopApi.GetDetailsAsync(missingIds); } catch { }
         }
 
-        var enhIds = ids.Where(id => global.TryGetValue(id, out var m) && m.IsEnhanced).ToList();
-        var legIds = ids.Where(id => global.TryGetValue(id, out var m) && !m.IsEnhanced).ToList();
+        bool DefaultEnh() => headerEnhanced ?? ReferenceEquals(_current, _enhanced);
+        bool VersionOf(string id) =>
+            global.TryGetValue(id, out var m) ? m.IsEnhanced
+            : missDetails.TryGetValue(id, out var d) ? d.IsEnhanced
+            : DefaultEnh();
+
+        // плейсхолдеры «не скачан» для недостающих — добавляем в списки нужной версии
+        var placeholders = new List<ModItem>();
+        foreach (var id in missingIds)
+        {
+            bool enh = VersionOf(id);
+            var ph = new ModItem(id, "", downloaded: false) { IsEnhanced = enh };
+            if (missDetails.TryGetValue(id, out var d))
+            {
+                if (!string.IsNullOrWhiteSpace(d.Title)) ph.Title = d.Title;
+                ph.PreviewUrl = d.PreviewUrl;
+                ph.FileSize = d.FileSize;
+            }
+            (enh ? _enhanced : _legacy).Available.Add(ph);
+            placeholders.Add(ph);
+        }
+
+        // раскладываем по версии (плейсхолдеры уже в списках, попадут в порядок)
+        var enhIds = ids.Where(VersionOf).ToList();
+        var legIds = ids.Where(id => !VersionOf(id)).ToList();
 
         bool endEnhanced = headerEnhanced ?? enhIds.Count >= legIds.Count;
-
-        int placedEnh = 0, placedLeg = 0;
         if (endEnhanced)
         {
-            if (legIds.Count > 0) placedLeg = ApplyOrderToVersion(false, legIds);
-            if (enhIds.Count > 0) placedEnh = ApplyOrderToVersion(true, enhIds);
+            if (legIds.Count > 0) ApplyOrderToVersion(false, legIds);
+            if (enhIds.Count > 0) ApplyOrderToVersion(true, enhIds);
         }
         else
         {
-            if (enhIds.Count > 0) placedEnh = ApplyOrderToVersion(true, enhIds);
-            if (legIds.Count > 0) placedLeg = ApplyOrderToVersion(false, legIds);
+            if (enhIds.Count > 0) ApplyOrderToVersion(true, enhIds);
+            if (legIds.Count > 0) ApplyOrderToVersion(false, legIds);
         }
-        int placed = placedEnh + placedLeg;
+
+        if (placeholders.Count > 0)
+        {
+            _ = LoadCachedThumbnailsAsync(placeholders);
+            _ = DownloadThumbnailsAsync(placeholders);
+        }
 
         RefreshPresetDirty();
 
-        string split = placedEnh > 0 && placedLeg > 0
-            ? $"{placedEnh} Enhanced + {placedLeg} Legacy"
-            : placedEnh > 0 ? $"{placedEnh} Enhanced" : $"{placedLeg} Legacy";
+        int total = ids.Count, missing = missingIds.Count, ready = total - missing;
+        void Redownload() => DownloadMissing(missingIds, onComplete: () => ApplyParsedImport(ids, headerEnhanced));
 
-        txtStatus.Text = $"Импортировано {placed} модов ({split})"
-            + (missingIds.Count > 0 ? $", не найдено {missingIds.Count}" : "")
-            + ". Нажмите «Применить», чтобы записать в modlist.txt.";
-
-        if (missingIds.Count > 0)
+        if (missing > 0)
         {
+            txtStatus.Text = $"Импортировано {total} модов: {ready} готовы, {missing} не скачано. " +
+                             "Нажмите «Скачать», затем «Применить».";
             ShowToast(
-                $"Импортировано {placed} ({split}). Не найдено в папке: {missingIds.Count}.",
+                $"Импортировано {total}: {ready} готовы, {missing} не скачано.",
                 ToastKind.Info,
-                actionText: $"Скачать ({missingIds.Count})",
+                actionText: $"Скачать ({missing})",
                 action: Redownload, seconds: 10);
         }
         else
         {
-            ShowToast($"Импортировано {placed} модов ({split}). Нажмите «Применить».", ToastKind.Success);
+            txtStatus.Text = $"Импортировано {total} модов. Нажмите «Применить», чтобы записать в modlist.txt.";
+            ShowToast($"Импортировано {total} модов. Нажмите «Применить».", ToastKind.Success);
         }
     }
 
@@ -1403,13 +1424,16 @@ public partial class MainWindow : Window
             var dir = Path.GetDirectoryName(modlist);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-            var lines = _current.Ordered.Select(m => m.PakPath).ToArray();
+            // нескачанные (плейсхолдеры) пропускаем — у них нет пути к .pak
+            var lines = _current.Ordered.Where(m => m.Downloaded).Select(m => m.PakPath).ToArray();
+            int skipped = _current.Ordered.Count - lines.Length;
             File.WriteAllLines(modlist, lines);
 
             _settings.Save();
             SetModlistBaseline();
-            txtStatus.Text = $"[{version}] записано {lines.Length} модов в {modlist}";
-            ShowToast($"Готово! {version}: записано {lines.Length} модов в modlist.txt", ToastKind.Success);
+            var skipNote = skipped > 0 ? $" (пропущено {skipped} не скачанных)" : "";
+            txtStatus.Text = $"[{version}] записано {lines.Length} модов в {modlist}{skipNote}";
+            ShowToast($"Готово! {version}: записано {lines.Length} модов в modlist.txt{skipNote}", ToastKind.Success);
             return true;
         }
         catch (Exception ex)

@@ -243,6 +243,15 @@
 
         <DataTemplate x:Key="ModTemplate">
             <Grid Margin="2">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding NotDownloaded}" Value="True">
+                                <Setter Property="Opacity" Value="0.6"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
                 <Grid.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="Открыть страницу в Steam" Click="OpenModPage_Click">
@@ -294,6 +303,13 @@
                                 Visibility="{Binding NeedsUpdate, Converter={StaticResource BoolToVis}}"
                                 ToolTip="Доступно обновление в Steam Workshop">
                             <TextBlock Text="обновление" Foreground="#1A1A1A"
+                                       FontSize="10" FontWeight="SemiBold"/>
+                        </Border>
+                        <Border Background="#C25A4A" CornerRadius="4" Padding="5,1" Margin="8,0,0,0"
+                                VerticalAlignment="Center"
+                                Visibility="{Binding NotDownloaded, Converter={StaticResource BoolToVis}}"
+                                ToolTip="Мод ещё не скачан — нажмите «Скачать» или обновите список">
+                            <TextBlock Text="не скачан" Foreground="White"
                                        FontSize="10" FontWeight="SemiBold"/>
                         </Border>
                     </StackPanel>

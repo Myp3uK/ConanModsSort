@@ -40,10 +40,14 @@ public class ModItem : INotifyPropertyChanged
         set { _needsUpdate = value; OnPropertyChanged(nameof(NeedsUpdate)); }
     }
 
-    public ModItem(string modId, string pakPath)
+    public bool Downloaded { get; }
+    public bool NotDownloaded => !Downloaded;
+
+    public ModItem(string modId, string pakPath, bool downloaded = true)
     {
         ModId = modId;
         PakPath = pakPath;
+        Downloaded = downloaded;
         _title = modId;
     }
 
