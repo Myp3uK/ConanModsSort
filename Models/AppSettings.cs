@@ -17,8 +17,6 @@ public class AppSettings
     public string? ModsFolder { get; set; }
     public string? ModlistPath { get; set; }
     public string? GamePath { get; set; }
-    public string? SteamCmdPath { get; set; }
-    public string? SteamLogin { get; set; }
     public List<ModPreset> Presets { get; set; } = new();
 
     private static string SettingsPath

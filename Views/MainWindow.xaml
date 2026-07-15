@@ -618,7 +618,7 @@
                 </Border>
                 <Button Content="&#xE117;" FontFamily="Segoe MDL2 Assets" Style="{StaticResource IconButton}"
                         Margin="10,0,0,0" VerticalAlignment="Center" Click="UpdateMods_Click"
-                        ToolTip="Проверить обновления модов через Steam и докачать нужные (SteamCMD)"/>
+                        ToolTip="Проверить обновления и докачать недостающие/устаревшие моды"/>
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">

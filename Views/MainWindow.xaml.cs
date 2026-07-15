@@ -2,10 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
-using System.Net.Http;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -87,6 +84,12 @@ public partial class MainWindow : Window
         }
 
         base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _steam?.Dispose();
+        base.OnClosed(e);
     }
 
     private void SaveLoadedPreset()
@@ -185,15 +188,69 @@ public partial class MainWindow : Window
             LoadPreset(p);
     }
 
-    private void LoadPreset(ModPreset p)
+    private async void LoadPreset(ModPreset p)
     {
-        int placed = ApplyOrderToVersion(p.IsEnhanced, p.ModIds);
+        var global = _enhanced.Available.Concat(_enhanced.Ordered)
+            .Concat(_legacy.Available).Concat(_legacy.Ordered)
+            .GroupBy(m => m.ModId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        // «нет мода» = нет в списках ИЛИ есть только как плейсхолдер «не скачан»
+        bool Have(string id) => global.TryGetValue(id, out var m) && m.Downloaded;
+        var missingIds = p.ModIds.Where(id => !Have(id)).ToList();
+
+        // данные из Steam тянем только для новых (которых ещё нет в списках)
+        var toFetch = missingIds.Where(id => !global.ContainsKey(id)).ToList();
+        var missDetails = new Dictionary<string, SteamWorkshopApi.Details>();
+        if (toFetch.Count > 0)
+        {
+            try { missDetails = await SteamWorkshopApi.GetDetailsAsync(toFetch); } catch { }
+        }
+
+        // недостающие моды профиля — плейсхолдеры «не скачан» в версии профиля
+        var placeholders = new List<ModItem>();
+        foreach (var id in missingIds)
+        {
+            if (global.TryGetValue(id, out var existing)) { placeholders.Add(existing); continue; }
+            var ph = new ModItem(id, "", downloaded: false) { IsEnhanced = p.IsEnhanced };
+            if (missDetails.TryGetValue(id, out var d))
+            {
+                if (!string.IsNullOrWhiteSpace(d.Title)) ph.Title = d.Title;
+                ph.PreviewUrl = d.PreviewUrl;
+                ph.FileSize = d.FileSize;
+            }
+            (p.IsEnhanced ? _enhanced : _legacy).Available.Add(ph);
+            placeholders.Add(ph);
+        }
+
+        ApplyOrderToVersion(p.IsEnhanced, p.ModIds);
         _loadedPreset = p;
         SetPresetBaseline();
         RefreshPresetDirty();
-        int missing = p.ModIds.Count - placed;
-        var note = missing > 0 ? $" ({missing} из профиля не найдено в папке)" : "";
-        txtStatus.Text = $"Профиль «{p.Name}» загружен{note}. Нажмите «Применить», чтобы записать в modlist.txt.";
+
+        if (placeholders.Count > 0)
+        {
+            _ = LoadCachedThumbnailsAsync(placeholders);
+            _ = DownloadThumbnailsAsync(placeholders);
+        }
+
+        int total = p.ModIds.Count, missing = missingIds.Count, ready = total - missing;
+        void Redownload() => DownloadMissing(missingIds, onComplete: () => LoadPreset(p));
+
+        if (missing > 0)
+        {
+            txtStatus.Text = $"Профиль «{p.Name}»: {ready} готовы, {missing} не скачано. " +
+                             "Нажмите «Скачать», затем «Применить».";
+            ShowToast(
+                $"Профиль «{p.Name}»: {ready} готовы, {missing} не скачано.",
+                ToastKind.Info,
+                actionText: $"Скачать ({missing})",
+                action: Redownload, seconds: 10);
+        }
+        else
+        {
+            txtStatus.Text = $"Профиль «{p.Name}» загружен. Нажмите «Применить», чтобы записать в modlist.txt.";
+        }
     }
 
     private int ApplyOrderToVersion(bool enhanced, IEnumerable<string> orderedIds)
@@ -313,13 +370,16 @@ public partial class MainWindow : Window
             .GroupBy(m => m.ModId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-        var missingIds = ids.Where(id => !global.ContainsKey(id)).ToList();
+        // «нет мода» = отсутствует в списках ИЛИ есть как плейсхолдер «не скачан»
+        bool Have(string id) => global.TryGetValue(id, out var m) && m.Downloaded;
+        var missingIds = ids.Where(id => !Have(id)).ToList();
 
-        // данные о недостающих (версия/название/превью) — для плейсхолдеров
+        // данные тянем только для НОВЫХ (которых ещё нет в списках)
+        var toFetch = missingIds.Where(id => !global.ContainsKey(id)).ToList();
         var missDetails = new Dictionary<string, SteamWorkshopApi.Details>();
-        if (missingIds.Count > 0)
+        if (toFetch.Count > 0)
         {
-            try { missDetails = await SteamWorkshopApi.GetDetailsAsync(missingIds); } catch { }
+            try { missDetails = await SteamWorkshopApi.GetDetailsAsync(toFetch); } catch { }
         }
 
         bool DefaultEnh() => headerEnhanced ?? ReferenceEquals(_current, _enhanced);
@@ -328,10 +388,15 @@ public partial class MainWindow : Window
             : missDetails.TryGetValue(id, out var d) ? d.IsEnhanced
             : DefaultEnh();
 
-        // плейсхолдеры «не скачан» для недостающих — добавляем в списки нужной версии
+        // плейсхолдеры «не скачан»: существующие (из modlist) переиспользуем, новые создаём
         var placeholders = new List<ModItem>();
         foreach (var id in missingIds)
         {
+            if (global.TryGetValue(id, out var existing))
+            {
+                placeholders.Add(existing);
+                continue;
+            }
             bool enh = VersionOf(id);
             var ph = new ModItem(id, "", downloaded: false) { IsEnhanced = enh };
             if (missDetails.TryGetValue(id, out var d))
@@ -386,27 +451,6 @@ public partial class MainWindow : Window
             txtStatus.Text = $"Импортировано {total} модов. Нажмите «Применить», чтобы записать в modlist.txt.";
             ShowToast($"Импортировано {total} модов. Нажмите «Применить».", ToastKind.Success);
         }
-    }
-
-    private async void OpenWorkshopPages(List<string> ids)
-    {
-        if (ids.Count == 0) return;
-
-        if (ids.Count > 12 &&
-            MessageDialog.Show(this, "Подписка", $"Будет открыто {ids.Count} вкладок в браузере. Продолжить?",
-                MessageButtons.YesNo, MessageKind.Question) != MessageResult.Yes)
-            return;
-
-        int opened = 0;
-        foreach (var id in ids)
-        {
-            var url = $"https://steamcommunity.com/sharedfiles/filedetails/?id={id}";
-            if (TryOpen(url)) opened++;
-            await Task.Delay(250);
-        }
-
-        txtStatus.Text = $"Открыто вкладок: {opened} — нажмите «Подписаться» на каждой, затем «Обновить».";
-        ShowToast($"Открыто {opened} страниц в браузере — подпишитесь и нажмите «Обновить».", ToastKind.Info);
     }
 
     private void OpenModPage_Click(object sender, RoutedEventArgs e)
@@ -507,12 +551,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private const int MaxDownloadAttempts = 8;
+    // ---------- Скачивание модов (SteamKit2, напрямую с CDN Valve) ----------
 
-    private void DownloadMissing(List<string> ids, Action? onComplete = null) =>
-        DownloadAttempt(ids, 1, onComplete);
+    private SteamDownloader? _steam;
+    private SteamDownloader Steam => _steam ??= new SteamDownloader();
 
-    private async void DownloadAttempt(List<string> ids, int attempt, Action? onComplete = null)
+    private string TitleFor(string id) =>
+        AllMods().FirstOrDefault(m => string.Equals(m.ModId, id, StringComparison.OrdinalIgnoreCase))?.Title ?? id;
+
+    private async void DownloadMissing(List<string> ids, Action? onComplete = null)
     {
         if (ids.Count == 0) return;
 
@@ -523,197 +570,67 @@ public partial class MainWindow : Window
             return;
         }
 
-        var libraryRoot = DeriveLibraryRoot();
-        if (libraryRoot == null)
+        var toGet = ids.Where(id => ulong.TryParse(id, out _)).ToList();
+        if (toGet.Count == 0)
         {
-            ShowToast("Не удалось определить корень библиотеки Steam из пути к модам.", ToastKind.Warning, seconds: 7);
+            ShowToast("Нет корректных Workshop-ID для загрузки.", ToastKind.Warning);
             return;
         }
 
-        var steamcmd = await EnsureSteamCmdAsync();
-        if (steamcmd == null)
+        ShowBusy("Подключаюсь к Steam…");
+        try
         {
-            OpenWorkshopPages(ids);
+            await Steam.EnsureLoggedInAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            HideBusy();
+            ShowToast($"Не удалось подключиться к Steam: {ex.Message}", ToastKind.Warning, seconds: 7);
             return;
         }
 
-        await WarmUpSteamCmdAsync(steamcmd);
-
-        var login = string.IsNullOrWhiteSpace(_settings.SteamLogin) ? "anonymous" : _settings.SteamLogin!;
-
-        var args = new StringBuilder();
-        args.Append($"+force_install_dir \"{libraryRoot}\" +login {login}");
-        foreach (var id in ids)
-            args.Append($" +workshop_download_item {SteamLocator.ConanAppId} {id} validate");
-        args.Append(" +quit");
-
-        var downloadsDir = Path.Combine(libraryRoot, "steamapps", "workshop", "downloads", SteamLocator.ConanAppId);
-
+        var failed = new List<string>();
+        int ok = 0;
         try
         {
-            var proc = new Process
+            for (int i = 0; i < toGet.Count; i++)
             {
-                StartInfo = new ProcessStartInfo(steamcmd, args.ToString())
+                var id = toGet[i];
+                int n = i + 1;
+                var dst = Path.Combine(modsFolder, id);
+                busyText.Text = $"Скачиваю {n}/{toGet.Count}: {TitleFor(id)}…";
+                var progress = new Progress<double>(p =>
+                    busyText.Text = $"Скачиваю {n}/{toGet.Count}: {TitleFor(id)} — {p:P0}");
+                try
                 {
-                    UseShellExecute = true,
-                    WorkingDirectory = Path.GetDirectoryName(steamcmd) ?? ""
-                },
-                EnableRaisingEvents = true
-            };
-
-            var watchdog = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            long lastSig = -1;
-            int stall = 0;
-            watchdog.Tick += (_, _) =>
-            {
-                long sig = DownloadProgressSignature(ids, modsFolder, downloadsDir);
-                if (sig != lastSig) { lastSig = sig; stall = 0; }
-                else if (++stall >= 6)
-                {
-                    try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
+                    await Steam.DownloadWorkshopItemAsync(ulong.Parse(id), dst, progress, CancellationToken.None);
+                    ok++;
                 }
-            };
-            watchdog.Start();
-
-            proc.Exited += (_, _) => Dispatcher.InvokeAsync(async () =>
-            {
-                watchdog.Stop();
-                await ReloadAsync();
-
-                var still = ids.Where(id => !Directory.Exists(Path.Combine(modsFolder, id))).ToList();
-                int got = ids.Count - still.Count;
-
-                if (still.Count == 0)
+                catch (Exception)
                 {
-                    if (onComplete != null) onComplete();
-                    else ShowToast($"Готово — скачано {ids.Count} модов.", ToastKind.Success);
+                    failed.Add(id);
                 }
-                else if ((got > 0 || attempt == 1) && attempt < MaxDownloadAttempts)
-                {
-                    ShowToast($"Скачано {got}, осталось {still.Count} — перезапускаю загрузчик…",
-                        ToastKind.Info, seconds: 4);
-                    DownloadAttempt(still, attempt + 1, onComplete);
-                }
-                else if (onComplete != null)
-                {
-                    onComplete();
-                }
-                else
-                {
-                    ShowToast(
-                        $"Не докачано {still.Count} мод(ов). Можно повторить вручную.",
-                        ToastKind.Warning,
-                        actionText: "Повторить",
-                        action: () => DownloadAttempt(still, 1));
-                }
-            });
-            proc.Start();
-
-            var note = attempt == 1 ? "" : $" (перезапуск {attempt})";
-            ShowToast($"SteamCMD качает {ids.Count} модов{note}… дождитесь завершения.",
-                ToastKind.Info, seconds: 8);
-        }
-        catch (Exception ex)
-        {
-            ShowToast($"Не удалось запустить SteamCMD: {ex.Message}", ToastKind.Warning, seconds: 7);
-        }
-    }
-
-    private static long DownloadProgressSignature(List<string> ids, string modsFolder, string downloadsDir)
-    {
-        long size = DirSize(downloadsDir);
-        foreach (var id in ids)
-            size += DirSize(Path.Combine(modsFolder, id));
-        return size;
-    }
-
-    private static long DirSize(string dir)
-    {
-        if (!Directory.Exists(dir)) return 0;
-        long size = 0;
-        try
-        {
-            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-            {
-                try { size += new FileInfo(f).Length; } catch { }
             }
         }
-        catch { }
-        return size;
-    }
-
-    private const string SteamCmdZipUrl = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
-
-    private bool _steamCmdWarmed;
-
-    private async Task WarmUpSteamCmdAsync(string steamcmd)
-    {
-        if (_steamCmdWarmed) return;
-        _steamCmdWarmed = true;
-
-        try
+        finally
         {
-            ShowToast("Подготовка SteamCMD…", ToastKind.Info, seconds: 15);
-            using var p = Process.Start(new ProcessStartInfo(steamcmd, "+quit")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = Path.GetDirectoryName(steamcmd) ?? ""
-            });
-            if (p == null) return;
-
-            await Task.Delay(15000);
-            try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { }
-        }
-        catch {  }
-    }
-
-    private async Task<string?> EnsureSteamCmdAsync()
-    {
-        if (!string.IsNullOrEmpty(_settings.SteamCmdPath) && File.Exists(_settings.SteamCmdPath))
-            return _settings.SteamCmdPath;
-
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "ConanModsSort", "steamcmd");
-        var exe = Path.Combine(dir, "steamcmd.exe");
-        if (File.Exists(exe))
-        {
-            _settings.SteamCmdPath = exe;
-            _settings.Save();
-            return exe;
+            HideBusy();
         }
 
-        try
+        await ReloadAsync();
+
+        if (onComplete != null)
         {
-            Directory.CreateDirectory(dir);
-            ShowToast("Скачиваю SteamCMD…", ToastKind.Info, seconds: 30);
-
-            var zip = Path.Combine(dir, "steamcmd.zip");
-            using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
-            {
-                var bytes = await http.GetByteArrayAsync(SteamCmdZipUrl);
-                await File.WriteAllBytesAsync(zip, bytes);
-            }
-
-            await Task.Run(() => ZipFile.ExtractToDirectory(zip, dir, overwriteFiles: true));
-            try { File.Delete(zip); } catch {  }
-
-            if (File.Exists(exe))
-            {
-                _settings.SteamCmdPath = exe;
-                _settings.Save();
-                ShowToast("SteamCMD установлен.", ToastKind.Success, seconds: 2);
-                return exe;
-            }
-
-            ShowToast("В архиве SteamCMD не найден steamcmd.exe.", ToastKind.Warning, seconds: 7);
-            return null;
+            onComplete();
         }
-        catch (Exception ex)
+        else if (failed.Count == 0)
         {
-            ShowToast($"Не удалось скачать SteamCMD: {ex.Message}", ToastKind.Warning, seconds: 7);
-            return null;
+            ShowToast($"Готово — скачано {ok} модов.", ToastKind.Success);
+        }
+        else
+        {
+            ShowToast($"Скачано {ok}, не удалось {failed.Count}.", ToastKind.Warning,
+                actionText: "Повторить", action: () => DownloadMissing(failed));
         }
     }
 
@@ -919,7 +836,18 @@ public partial class MainWindow : Window
                 byId[modId] = new ModItem(modId, pak);
             }
 
-            _ = LoadCachedThumbnailsAsync(byId.Values.ToList());
+            // моды из modlist.txt, которых нет в папке — «не скачан» (плейсхолдеры)
+            var orderedIds = ReadModlistOrder(_settings.ModlistPath);
+            var orphanIds = orderedIds
+                .Where(x => x.id != null && !byId.ContainsKey(x.id!))
+                .Select(x => x.id!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var orphans = new Dictionary<string, ModItem>(StringComparer.OrdinalIgnoreCase);
+            foreach (var id in orphanIds)
+                orphans[id] = new ModItem(id, "", downloaded: false);
+
+            _ = LoadCachedThumbnailsAsync(byId.Values.Concat(orphans.Values).ToList());
 
             txtStatus.Text = $"Модов: {byId.Count}. Загружаю данные из Steam…";
             busyText.Text = $"Загружаю данные о {byId.Count} модах из Steam…";
@@ -927,7 +855,7 @@ public partial class MainWindow : Window
             string? error = null;
             try
             {
-                var details = await SteamWorkshopApi.GetDetailsAsync(byId.Keys);
+                var details = await SteamWorkshopApi.GetDetailsAsync(byId.Keys.Concat(orphanIds));
 
                 var libRoot = DeriveLibraryRoot();
                 var installed = libRoot != null
@@ -952,16 +880,27 @@ public partial class MainWindow : Window
                         }
                     }
                 }
+
+                foreach (var ph in orphans.Values)
+                {
+                    if (details.TryGetValue(ph.ModId, out var d))
+                    {
+                        if (!string.IsNullOrWhiteSpace(d.Title)) ph.Title = d.Title!;
+                        ph.IsEnhanced = d.IsEnhanced;
+                        ph.PreviewUrl = d.PreviewUrl;
+                        ph.FileSize = d.FileSize;
+                    }
+                }
             }
             catch (Exception ex)
             {
                 error = ex.Message;
             }
 
-            Partition(byId);
+            Partition(byId, orphans, orderedIds);
 
             if (error == null)
-                _ = DownloadThumbnailsAsync(byId.Values.ToList());
+                _ = DownloadThumbnailsAsync(byId.Values.Concat(orphans.Values).ToList());
 
             UpdateStatus();
             int updates = AllMods().Count(m => m.NeedsUpdate);
@@ -979,27 +918,24 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Partition(Dictionary<string, ModItem> byId)
+    private void Partition(Dictionary<string, ModItem> byId,
+        Dictionary<string, ModItem> orphans, List<(string? id, string? path)> orderedIds)
     {
         VersionLists ListsFor(ModItem m) => m.IsEnhanced ? _enhanced : _legacy;
 
-        var orderedIds = ReadModlistOrder(_settings.ModlistPath);
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (id, path) in orderedIds)
         {
-            if (id != null && byId.TryGetValue(id, out var item))
-            {
+            ModItem? item =
+                id != null && byId.TryGetValue(id, out var real) ? real
+                : id != null && orphans.TryGetValue(id, out var ph) ? ph
+                : path != null
+                    ? new ModItem(Path.GetFileNameWithoutExtension(path), path, downloaded: File.Exists(path))
+                        { Title = Path.GetFileNameWithoutExtension(path) }
+                    : null;
+
+            if (item != null && used.Add(item.ModId))
                 ListsFor(item).Ordered.Add(item);
-                used.Add(item.ModId);
-            }
-            else if (path != null)
-            {
-                var fallbackId = id ?? Path.GetFileNameWithoutExtension(path);
-                _legacy.Ordered.Add(new ModItem(fallbackId, path)
-                {
-                    Title = Path.GetFileNameWithoutExtension(path)
-                });
-            }
         }
 
         foreach (var item in byId.Values
@@ -1339,18 +1275,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        var toGet = AllMods().Where(m => m.NeedsUpdate)
+        var toGet = AllMods().Where(m => m.NeedsUpdate || m.NotDownloaded)
             .Select(m => m.ModId)
             .Where(id => long.TryParse(id, out _))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         if (toGet.Count == 0)
         {
-            ShowToast("Обновлять нечего — все моды актуальны.", ToastKind.Success);
+            ShowToast("Всё на месте — обновлять и докачивать нечего.", ToastKind.Success);
             return;
         }
 
-        ShowToast($"Обновляю {toGet.Count} мод(ов) через SteamCMD…", ToastKind.Info, seconds: 5);
+        ShowToast($"Скачиваю {toGet.Count} мод(ов) (обновления и недостающие)…", ToastKind.Info, seconds: 5);
         DownloadMissing(toGet);
     }
 
