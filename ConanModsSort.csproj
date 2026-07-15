@@ -19,4 +19,8 @@
     <Resource Include="Icon.png" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="SteamKit2" Version="3.4.0" />
+  </ItemGroup>
+
 </Project>
