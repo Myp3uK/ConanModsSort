@@ -619,6 +619,12 @@
                 <Button Content="&#xE117;" FontFamily="Segoe MDL2 Assets" Style="{StaticResource IconButton}"
                         Margin="10,0,0,0" VerticalAlignment="Center" Click="UpdateMods_Click"
                         ToolTip="Проверить обновления и докачать недостающие/устаревшие моды"/>
+                <Button x:Name="btnSubscribe" Content="Подписаться" Margin="8,0,0,0" VerticalAlignment="Center"
+                        Style="{StaticResource FlatButton}" Click="Subscribe_Click"
+                        ToolTip="Войти в Steam и подписаться на все моды списка — нужно, чтобы играть на серверах (Steam учитывает моды по подписке)"/>
+                <Button x:Name="btnSteamLogout" Content="Выйти" Margin="6,0,0,0" VerticalAlignment="Center"
+                        Visibility="Collapsed" Style="{StaticResource FlatButton}" Click="SteamLogout_Click"
+                        ToolTip="Забыть сохранённый вход в Steam"/>
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
