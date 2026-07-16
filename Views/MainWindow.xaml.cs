@@ -49,6 +49,7 @@ public partial class MainWindow : Window
         lstOrdered.ItemsSource = _current.Ordered;
         cmbPreset.ItemsSource = _settings.Presets;
 
+        Loaded += (_, _) => UpdateSteamUi();
         Loaded += async (_, _) => await InitializeAsync();
     }
 
@@ -89,6 +90,7 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _steam?.Dispose();
+        _account?.Dispose();
         base.OnClosed(e);
     }
 
@@ -555,6 +557,101 @@ public partial class MainWindow : Window
 
     private SteamDownloader? _steam;
     private SteamDownloader Steam => _steam ??= new SteamDownloader();
+
+    // ---------- Вход в Steam и подписка (для игры на серверах) ----------
+
+    private SteamAccount? _account;
+    private SteamAccount Account => _account ??= new SteamAccount();
+
+    private void UpdateSteamUi() =>
+        btnSteamLogout.Visibility = _settings.HasSteamLogin ? Visibility.Visible : Visibility.Collapsed;
+
+    // Гарантирует вход: сначала по сохранённому токену, иначе — диалог логина/пароля с 2FA.
+    private async Task<bool> EnsureSteamLoginAsync()
+    {
+        if (Account.IsLoggedOn) return true;
+
+        // 1) сохранённый refresh-токен
+        if (_settings.HasSteamLogin)
+        {
+            var token = _settings.GetSteamRefreshToken();
+            if (!string.IsNullOrEmpty(token))
+            {
+                try
+                {
+                    busyText.Text = "Вхожу в Steam…";
+                    await Account.LoginWithTokenAsync(_settings.SteamAccountName!, token!, CancellationToken.None);
+                    return true;
+                }
+                catch { /* токен истёк — попросим пароль */ }
+            }
+        }
+
+        // 2) QR-код (по умолчанию) или логин/пароль — через диалог входа
+        HideBusy();
+        var dlg = new QrLoginDialog(Account) { Owner = this };
+        if (dlg.ShowDialog() == true && dlg.LoginResult is { } result)
+        {
+            _settings.SaveSteamLogin(result.AccountName, result.RefreshToken);
+            UpdateSteamUi();
+            return true;
+        }
+        return false;
+    }
+
+    private async void Subscribe_Click(object sender, RoutedEventArgs e)
+    {
+        var ids = AllMods()
+            .Where(m => ulong.TryParse(m.ModId, out _))
+            .Select(m => ulong.Parse(m.ModId))
+            .Distinct()
+            .ToList();
+
+        if (ids.Count == 0)
+        {
+            ShowToast("В списке нет модов для подписки.", ToastKind.Warning);
+            return;
+        }
+
+        ShowBusy("Подключаюсь к Steam…");
+        bool logged = await EnsureSteamLoginAsync();
+        if (!logged) { HideBusy(); return; }
+
+        int ok;
+        try
+        {
+            ShowBusy($"Подписка: 0/{ids.Count}…");
+            var progress = new Progress<(int done, int total)>(p =>
+                busyText.Text = $"Подписка: {p.done}/{p.total}…");
+            ok = await Account.SubscribeAsync(ids, progress, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            HideBusy();
+            ShowToast($"Ошибка подписки: {ex.Message}", ToastKind.Warning, seconds: 8);
+            return;
+        }
+        finally
+        {
+            HideBusy();
+        }
+
+        ShowToast($"Подписка оформлена: {ok} из {ids.Count}. Запустите Steam — он синхронизирует и " +
+                  "докачает моды (уже скачанные подхватятся из папки).", ToastKind.Success, seconds: 12);
+    }
+
+    private void SteamLogout_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageDialog.Show(this, "Выход из Steam", "Забыть сохранённый вход в Steam?",
+                MessageButtons.YesNo, MessageKind.Question) != MessageResult.Yes)
+            return;
+
+        _account?.Dispose();
+        _account = null;
+        _settings.ClearSteamLogin();
+        UpdateSteamUi();
+        ShowToast("Вход в Steam забыт.", ToastKind.Info, seconds: 4);
+    }
 
     private string TitleFor(string id) =>
         AllMods().FirstOrDefault(m => string.Equals(m.ModId, id, StringComparison.OrdinalIgnoreCase))?.Title ?? id;

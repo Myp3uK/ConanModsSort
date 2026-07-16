@@ -1,0 +1,68 @@
+<Window x:Class="ConanModsSort.QrLoginDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        SizeToContent="Height" Width="420"
+        WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="False"
+        ShowInTaskbar="False" WindowStartupLocation="CenterOwner" Background="#1C1C25"
+        FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <Style x:Key="DlgBtn" TargetType="Button">
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="MinWidth" Value="94"/>
+            <Setter Property="Margin" Value="8,0,0,0"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#2A2A36"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}"
+                                Padding="14,0" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#363645"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="#3A7BD5" BorderThickness="1" Padding="20">
+        <StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,14" Background="Transparent"
+                        MouseLeftButtonDown="TitleBar_Drag">
+                <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="20" Text="&#xE8C7;"
+                           Foreground="#3A7BD5" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock Text="Вход в Steam по QR-коду" Foreground="#E8E8EE" FontSize="15"
+                           FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <TextBlock Text="Откройте мобильное приложение Steam → Steam Guard → значок сканера и наведите камеру на код."
+                       Foreground="#9A9AA6" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"
+                       HorizontalAlignment="Center" TextAlignment="Center"/>
+
+            <Border Width="240" Height="240" HorizontalAlignment="Center" Background="White"
+                    CornerRadius="8" Padding="8">
+                <Grid>
+                    <Image x:Name="imgQr" Stretch="Uniform" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                    <TextBlock x:Name="txtQrStatus" Text="Подключаюсь к Steam…" Foreground="#555"
+                               FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <TextBlock x:Name="txtStatus" Text="Ожидаю сканирования…" Foreground="#C8C8D2"
+                       FontSize="12" Margin="0,14,0,0" HorizontalAlignment="Center"/>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,16,0,0">
+                <Button x:Name="btnPassword" Content="Войти по паролю"
+                        Style="{StaticResource DlgBtn}" Margin="0" Click="Password_Click"/>
+                <Button Content="Отмена" Style="{StaticResource DlgBtn}" IsCancel="True" Click="Cancel_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>
